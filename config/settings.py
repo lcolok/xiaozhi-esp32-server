@@ -1,7 +1,8 @@
 import os
 import argparse
 from ruamel.yaml import YAML
-from core.utils.util import read_config, get_project_dir
+from core.utils.util import get_project_dir
+from core.utils.config_loader import ConfigLoader
 
 
 def get_config_file():
@@ -18,7 +19,9 @@ def load_config():
     default_config_file = get_config_file()
     parser.add_argument("--config_path", type=str, default=default_config_file)
     args = parser.parse_args()
-    return read_config(args.config_path)
+    
+    # 使用新的 ConfigLoader 加载配置
+    return ConfigLoader.load_config(args.config_path)
 
 
 def update_config(config):

@@ -7,7 +7,7 @@
 server:
   # 服务器监听地址和端口(Server listening address and port)
   ip: 0.0.0.0
-  port: 8000
+  port: 27182
   # 认证配置
   auth:
     # 是否启用认证
@@ -35,7 +35,7 @@ xiaozhi:
   transport: websocket
   audio_params:
     format: opus
-    sample_rate: 16000
+    sample_rate: 24000
     channels: 1
     frame_duration: 60
 prompt: |
@@ -62,9 +62,9 @@ selected_module:
   ASR: FunASR
   VAD: SileroVAD
   # 将根据配置名称对应的type调用实际的LLM适配器
-  LLM: ChatGLMLLM
+  LLM: SiliconflowLLM
   # TTS将根据配置名称对应的type调用实际的TTS适配器
-  TTS: EdgeTTS
+  TTS: DoubaoTTS
 
 ASR:
   FunASR:
@@ -79,20 +79,26 @@ VAD:
 
 LLM:
   # 当前支持的type为openai、dify、ollama，可自行适配
+  SiliconflowLLM:
+    # 定义LLM API类型
+    type: openai
+    model_name: Qwen/Qwen2.5-72B-Instruct
+    url: https://api.siliconflow.cn/v1
+    api_key: ${SILICONFLOW_API_KEY}
   AliLLM:
     # 定义LLM API类型
     type: openai
     # 可在这里找到你的 api_key https://bailian.console.aliyun.com/?apiKey=1#/api-key
     base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model_name: qwen-turbo
-    api_key: 你的deepseek api key
+    api_key: ${ALI_API_KEY}
   DeepSeekLLM:
     # 定义LLM API类型
     type: openai
     # 可在这里找到你的api key https://platform.deepseek.com/
     model_name: deepseek-chat
     url: https://api.deepseek.com
-    api_key: 你的deepseek api key
+    api_key: ${DEEPSEEK_API_KEY}
   ChatGLMLLM:
     # 定义LLM API类型
     type: openai
@@ -100,7 +106,7 @@ LLM:
     # 可在这里找到你的api key https://bigmodel.cn/usercenter/proj-mgmt/apikeys
     model_name: glm-4-flash
     url: https://open.bigmodel.cn/api/paas/v4/
-    api_key: 你的chat-glm api key
+    api_key: ${CHATGLM_API_KEY}
   OllamaLLM:
     # 定义LLM API类型
     type: ollama
@@ -112,22 +118,22 @@ LLM:
     # 建议使用本地部署的dify接口，国内部分区域访问dify公有云接口可能会受限
     # 如果使用DifyLLM，配置文件里prompt(提示词)是无效的，需要在dify控制台设置提示词
     base_url: https://api.dify.cn/v1
-    api_key: 你的DifyLLM api key
+    api_key: ${DIFY_API_KEY}
   GeminiLLM:
     type: gemini
     # 谷歌Gemini API，需要先在Google Cloud控制台创建API密钥并获取api_key
     # 若在中国境内使用，请遵守《生成式人工智能服务管理暂行办法》
     # token申请地址： https://aistudio.google.com/apikey
     # 若部署地无法访问接口，需要开启科学上网
-    api_key: 你的gemini api key
+    api_key: ${GEMINI_API_KEY}
     model_name: "gemini-1.5-pro"  #  gemini-1.5-pro 是免费的
   CozeLLM:
     # 定义LLM API类型
     type: coze
-    bot_id: 你的bot_id
-    user_id: 你的user_id
+    bot_id: ${COZE_BOT_ID}
+    user_id: ${COZE_USER_ID}
     base_url: "https://api.coze.cn/open_api/v2/chat" # 服务地址
-    personal_access_token: 你的coze个人令牌
+    personal_access_token: ${COZE_API_KEY}
 TTS:
   # 当前支持的type为edge、doubao，可自行适配
   EdgeTTS:
@@ -142,10 +148,10 @@ TTS:
     # 山引擎语音一定要购买花钱，起步价30元，就有100并发了。如果用免费的只有2个并发，会经常报tts错误
     # 购买服务后，购买免费的音色后，可能要等半小时左右，才能使用。
     # 地址：https://console.volcengine.com/speech/service/8
-    voice: BV001_streaming
+    voice: BV700_streaming
     output_file: tmp/
-    appid: 你的火山引擎语音合成服务appid
-    access_token: 你的火山引擎语音合成服务access_token
+    appid: ${DOUBAO_APPID}
+    access_token: ${DOUBAO_ACCESS_TOKEN}
     cluster: volcano_tts
   CosyVoiceSiliconflow:
     type: siliconflow
@@ -154,7 +160,7 @@ TTS:
     model: FunAudioLLM/CosyVoice2-0.5B
     voice: FunAudioLLM/CosyVoice2-0.5B:alex
     output_file: tmp/
-    access_token: 你的硅基流动API密钥
+    access_token: ${SILICONFLOW_TTS_ACCESS_TOKEN}
     response_format: wav
   CozeCnTTS:
     type: cozecn
@@ -162,17 +168,10 @@ TTS:
     # token申请地址 https://www.coze.cn/open/oauth/pats
     voice: 7426720361733046281
     output_file: tmp/
-    access_token: 你的coze api key
+    access_token: ${COZECN_ACCESS_TOKEN}
     response_format: wav
   FishSpeech:
     # 定义TTS API类型
-    #启动tts方法：
-    #python -m tools.api_server
-    #--listen 0.0.0.0:8080
-    #--llama-checkpoint-path "checkpoints/fish-speech-1.5"
-    #--decoder-checkpoint-path "checkpoints/fish-speech-1.5/firefly-gan-vq-fsq-8x1024-21hz-generator.pth"
-    #--decoder-config-name firefly_gan_vq
-    #--compile
     type: fishspeech
     output_file: tmp/
     response_format: wav
@@ -190,7 +189,7 @@ TTS:
     seed: null
     channels: 1
     rate: 44100
-    api_key: "你的api_key"
+    api_key: ${FISHSPEECH_API_KEY}
     api_url: "http://127.0.0.1:8080/v1/tts"
   GPT_SOVITS_V2:
     # 定义TTS API类型
