@@ -26,7 +26,7 @@ ormsgpack = "1.7.0"
 ruamel-yaml = "0.18.10"
 setuptools = "^75.8.0"
 loguru = "^0.7.3"
-
+python-dotenv = "^1.0.1"
 
 [[tool.poetry.source]]
 name = "mirrors"
