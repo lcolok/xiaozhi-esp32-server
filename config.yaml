@@ -219,7 +219,7 @@ TTS:
   MiniMaxTTS:
     type: minimax
     model: speech-01-turbo
-    voice_id: male-qn-qingse
+    voice_id: Chinese (Mandarin)_Soft_Girl
     base_url: ${MINIMAX_BASE_URL}
     group_id: ${MINIMAX_GROUP_ID}
     api_key: ${MINIMAX_API_KEY}
