@@ -1,8 +1,9 @@
 import json
 import os
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator, Tuple
 
+import aiohttp
 import requests
 from loguru import logger
 
@@ -33,6 +34,7 @@ class TTSProvider(TTSProviderBase):
         })
         self.output_file = config.get('output_file', 'tmp/')
         os.makedirs(self.output_file, exist_ok=True)
+        self.supports_streaming = True  # MiniMax 支持流式输出
 
     def generate_filename(self, extension=None):
         """生成输出文件名"""
@@ -41,19 +43,13 @@ class TTSProvider(TTSProviderBase):
         return os.path.join(self.output_file, f'minimax_tts_{hash(str(time.time()))}{extension}')
 
     async def text_to_speak(self, text: str, output_file: str) -> None:
-        """
-        将文本转换为语音
-        :param text: 要转换的文本
-        :param output_file: 输出文件路径
-        """
-        # 准备请求数据
+        """非流式文本转语音接口"""
         url = f"{self.base_url}?GroupId={self.group_id}"
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
 
-        # 构建请求体
         data = {
             "model": self.model,
             "text": text,
@@ -75,16 +71,62 @@ class TTSProvider(TTSProviderBase):
                 logger.bind(tag=TAG).error(f"MiniMax TTS API error: {error_msg}")
                 return
 
-            # 获取音频数据
             audio_data = response_data.get('data', {}).get('audio')
             if not audio_data:
                 logger.bind(tag=TAG).error("No audio data in response")
                 return
 
-            # 将十六进制字符串转换为字节并保存
             with open(output_file, 'wb') as f:
                 f.write(bytes.fromhex(audio_data))
 
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error in MiniMax TTS: {str(e)}")
+            return
+
+    async def stream_text_to_speak(self, text: str) -> AsyncGenerator[Tuple[bytes, float], None]:
+        """流式文本转语音接口"""
+        url = f"{self.base_url}?GroupId={self.group_id}"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+
+        data = {
+            "model": self.model,
+            "text": text,
+            "stream": True,
+            "voice_setting": {
+                "voice_id": self.voice_id,
+                **self.voice_setting
+            },
+            "audio_setting": self.audio_setting
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, headers=headers, json=data) as response:
+                    response.raise_for_status()
+                    async for line in response.content:
+                        if line.startswith(b'data: '):
+                            try:
+                                json_data = json.loads(line[6:])
+                                if json_data.get('base_resp', {}).get('status_code') != 0:
+                                    error_msg = json_data.get('base_resp', {}).get('status_msg', 'Unknown error')
+                                    logger.bind(tag=TAG).error(f"MiniMax TTS API error: {error_msg}")
+                                    return
+
+                                audio_data = json_data.get('data', {}).get('audio')
+                                if audio_data:
+                                    audio_bytes = bytes.fromhex(audio_data)
+                                    # 将音频数据转换为 Opus 格式
+                                    opus_packets, duration = await self.stream_to_opus(audio_bytes)
+                                    for packet in opus_packets:
+                                        yield packet, duration / len(opus_packets)
+                            except json.JSONDecodeError:
+                                logger.bind(tag=TAG).error("Failed to decode JSON from stream")
+                            except Exception as e:
+                                logger.bind(tag=TAG).error(f"Error processing stream chunk: {str(e)}")
+
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"Error in MiniMax streaming TTS: {str(e)}")
             return

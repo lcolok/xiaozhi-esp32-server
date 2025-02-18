@@ -1,10 +1,11 @@
 import asyncio
-from config.logger import setup_logging
+from abc import ABC, abstractmethod
 import os
+from typing import AsyncGenerator, Optional, List, Tuple
 import numpy as np
 import opuslib
 from pydub import AudioSegment
-from abc import ABC, abstractmethod
+from config.logger import setup_logging
 
 TAG = __name__
 logger = setup_logging()
@@ -14,12 +15,14 @@ class TTSProviderBase(ABC):
     def __init__(self, config, delete_audio_file):
         self.delete_audio_file = delete_audio_file
         self.output_file = config.get("output_file")
+        self.supports_streaming = False  # 默认不支持流式输出
 
     @abstractmethod
     def generate_filename(self):
         pass
 
     def to_tts(self, text):
+        """非流式文本转语音的默认实现"""
         tmp_file = self.generate_filename()
         try:
             max_repeat_time = 5
@@ -38,12 +41,20 @@ class TTSProviderBase(ABC):
             return None
 
     @abstractmethod
-    async def text_to_speak(self, text, output_file):
+    async def text_to_speak(self, text: str, output_file: str) -> None:
+        """非流式文本转语音接口"""
         pass
 
-    def wav_to_opus_data(self, wav_file_path):
+    async def stream_text_to_speak(self, text: str) -> AsyncGenerator[Tuple[bytes, float], None]:
+        """
+        流式文本转语音接口
+        返回: 生成器，每次返回 (音频数据, 持续时间)
+        """
+        raise NotImplementedError("This TTS provider does not support streaming")
+
+    def wav_to_opus_data(self, wav_file_path) -> Tuple[List[bytes], float]:
+        """将 WAV 文件转换为 Opus 数据包列表和持续时间"""
         # 使用pydub加载PCM文件
-        # 获取文件后缀名
         file_type = os.path.splitext(wav_file_path)[1]
         if file_type:
             file_type = file_type.lstrip('.')
@@ -51,10 +62,8 @@ class TTSProviderBase(ABC):
 
         duration = len(audio) / 1000.0
 
-        # 转换为单声道和16kHz采样率（确保与编码器匹配）
+        # 转换为单声道和16kHz采样率
         audio = audio.set_channels(1).set_frame_rate(16000)
-
-        # 获取原始PCM数据（16位小端）
         raw_data = audio.raw_data
 
         # 初始化Opus编码器
@@ -65,19 +74,41 @@ class TTSProviderBase(ABC):
         frame_size = int(16000 * frame_duration / 1000)  # 960 samples/frame
 
         opus_datas = []
-        # 按帧处理所有音频数据（包括最后一帧可能补零）
-        for i in range(0, len(raw_data), frame_size * 2):  # 16bit=2bytes/sample
-            # 获取当前帧的二进制数据
+        # 按帧处理音频数据
+        for i in range(0, len(raw_data), frame_size * 2):
             chunk = raw_data[i:i + frame_size * 2]
-
-            # 如果最后一帧不足，补零
             if len(chunk) < frame_size * 2:
                 chunk += b'\x00' * (frame_size * 2 - len(chunk))
-
-            # 转换为numpy数组处理
             np_frame = np.frombuffer(chunk, dtype=np.int16)
+            opus_data = encoder.encode(np_frame.tobytes(), frame_size)
+            opus_datas.append(opus_data)
 
-            # 编码Opus数据
+        return opus_datas, duration
+
+    async def stream_to_opus(self, audio_data: bytes) -> Tuple[List[bytes], float]:
+        """将原始音频数据流转换为 Opus 数据包列表和持续时间"""
+        # 将字节数据转换为 AudioSegment
+        audio = AudioSegment(
+            data=audio_data,
+            sample_width=2,  # 16-bit
+            frame_rate=16000,
+            channels=1
+        )
+
+        duration = len(audio) / 1000.0
+        raw_data = audio.raw_data
+
+        # 初始化Opus编码器
+        encoder = opuslib.Encoder(16000, 1, opuslib.APPLICATION_AUDIO)
+        frame_duration = 60
+        frame_size = int(16000 * frame_duration / 1000)
+
+        opus_datas = []
+        for i in range(0, len(raw_data), frame_size * 2):
+            chunk = raw_data[i:i + frame_size * 2]
+            if len(chunk) < frame_size * 2:
+                chunk += b'\x00' * (frame_size * 2 - len(chunk))
+            np_frame = np.frombuffer(chunk, dtype=np.int16)
             opus_data = encoder.encode(np_frame.tobytes(), frame_size)
             opus_datas.append(opus_data)
 

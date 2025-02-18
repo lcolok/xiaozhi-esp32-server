@@ -84,7 +84,7 @@ async def sendAudioMessage(conn, audios, duration, text):
         logger.bind(tag=TAG).info(f"发送第一段语音: {text}")
         conn.tts_start_speak_time = time.time()
 
-    # 发送 sentence_start（每个音频文件之前发送一次）
+    # 发送 sentence_start
     sentence_task = asyncio.create_task(
         schedule_with_interrupt(base_delay, send_tts_message(conn, "sentence_start", text))
     )
@@ -92,9 +92,16 @@ async def sendAudioMessage(conn, audios, duration, text):
 
     conn.tts_duration += duration
 
-    # 发送音频数据
-    for idx, opus_packet in enumerate(audios):
-        await conn.websocket.send(opus_packet)
+    # 根据 TTS 提供商是否支持流式输出来处理
+    if isinstance(audios, list):
+        # 非流式输出
+        for idx, opus_packet in enumerate(audios):
+            await conn.websocket.send(opus_packet)
+    else:
+        # 流式输出
+        async for opus_packet, packet_duration in audios:
+            await conn.websocket.send(opus_packet)
+            conn.tts_duration += packet_duration
 
     if conn.llm_finish_task and text == conn.tts_last_text:
         stop_duration = conn.tts_duration - (time.time() - conn.tts_start_speak_time)
