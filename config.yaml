@@ -64,7 +64,7 @@ selected_module:
   # 将根据配置名称对应的type调用实际的LLM适配器
   LLM: SiliconflowLLM
   # TTS将根据配置名称对应的type调用实际的TTS适配器
-  TTS: DoubaoTTS
+  TTS: MiniMaxTTS
 
 ASR:
   FunASR:
@@ -216,3 +216,21 @@ TTS:
     parallel_infer: true
     repetition_penalty: 1.35
     aux_ref_audio_paths: []
+  MiniMaxTTS:
+    type: minimax
+    model: speech-01-turbo
+    voice_id: male-qn-qingse
+    base_url: ${MINIMAX_BASE_URL}
+    group_id: ${MINIMAX_GROUP_ID}
+    api_key: ${MINIMAX_API_KEY}
+    output_file: tmp/
+    voice_setting:
+      speed: 1.0
+      vol: 1.0
+      pitch: 0
+      emotion: happy
+    audio_setting:
+      sample_rate: 32000
+      bitrate: 128000
+      format: mp3
+      channel: 1
