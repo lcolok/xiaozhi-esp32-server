@@ -213,6 +213,7 @@ class ConnectionHandler:
         self.dialogue.put(Message(role="user", content=query))
         response_message = []
         current_text = ""
+        is_first_segment = True
         
         # 提交 LLM 任务
         try:
@@ -232,8 +233,9 @@ class ConnectionHandler:
             response_message.append(content)
             current_text = "".join(response_message)
             
-            # 使用新的分段器进行分段
-            segments = self.text_segmenter.segment(current_text)
+            # 使用流式分段器进行分段
+            segments = self.text_segmenter.segment_stream(current_text, is_first_segment)
+            is_first_segment = False
             
             # 如果有完整的分段，处理除最后一个分段外的所有分段
             if len(segments) > 1:
@@ -306,13 +308,13 @@ class ConnectionHandler:
     def speak_and_play(self, text):
         if text is None or len(text) <= 0:
             self.logger.bind(tag=TAG).info(f"无需tts转换，query为空，{text}")
-            return None, text
+            return (None, text)  # 修改：确保返回元组
         tts_file = self.tts.to_tts(text)
         if tts_file is None:
             self.logger.bind(tag=TAG).error(f"tts转换失败，{text}")
-            return None, text
+            return (None, text)  # 修改：确保返回元组
         self.logger.bind(tag=TAG).debug(f"TTS 文件生成完毕: {tts_file}")
-        return tts_file, text
+        return (tts_file, text)  # 修改：确保返回元组
 
     def clearSpeakStatus(self):
         self.logger.bind(tag=TAG).debug(f"清除服务端讲话状态")

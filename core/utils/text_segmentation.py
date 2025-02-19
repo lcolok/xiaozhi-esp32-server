@@ -58,6 +58,8 @@ class TextSegmenter:
             self.style_or_domain = self.config.get("style_or_domain")
             self.language = self.config.get("language")
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            # 添加快速首句提取的配置
+            self.min_punctuation_count = self.config.get("min_punctuation_count", 2)
             self._timing_stats.end("config_load")
             
             # 初始化模型
@@ -119,21 +121,91 @@ class TextSegmenter:
         """获取时间统计信息"""
         return cls._timing_stats.get_stats()
 
-    def segment(self, text: str) -> List[str]:
+    def _quick_first_sentence(self, text: str) -> tuple[str, str]:
+        """快速提取第一句话，基于简单的标点符号计数
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            tuple: (第一句话, 剩余文本)
+        """
+        import re
+        
+        # 定义标点符号模式
+        punct_pattern = r'[。！？!?.,，]'
+        
+        # 初始化计数器和上一个标点位置
+        punct_count = 0
+        last_punct_pos = -1
+        
+        # 遍历文本寻找标点
+        for match in re.finditer(punct_pattern, text):
+            punct_count += 1
+            last_punct_pos = match.end()
+            
+            # 如果达到所需的标点数量
+            if punct_count >= self.min_punctuation_count:
+                break
+        
+        # 如果找到了足够的标点
+        if last_punct_pos > 0:
+            first_sentence = text[:last_punct_pos].strip()
+            remaining_text = text[last_punct_pos:].strip()
+            return first_sentence, remaining_text
+        
+        # 如果没有找到足够的标点，返回空和原文本
+        return "", text
+
+    def _find_last_sentence_break(self, text: str) -> int:
+        """在文本中找到最后一个完整句子的结束位置
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            int: 最后一个完整句子的结束位置，如果没有找到则返回-1
+        """
+        import re
+        
+        # 定义标点符号模式
+        punct_pattern = r'[。！？!?.,，]'
+        
+        last_punct_pos = -1
+        for match in re.finditer(punct_pattern, text):
+            last_punct_pos = match.end()
+        
+        return last_punct_pos
+
+    def segment(self, text: str, quick_first: bool = True) -> List[str]:
         """将文本分段
         
         Args:
             text: 输入文本
+            quick_first: 是否使用快速首句提取
             
         Returns:
             分段后的文本列表
         """
         try:
             self._timing_stats.start("segment_process")
+            
+            # 如果启用快速首句提取
+            if quick_first:
+                first_sentence, remaining_text = self._quick_first_sentence(text)
+                if first_sentence:
+                    # 如果有剩余文本，使用模型处理
+                    if remaining_text:
+                        remaining_segments = self.model.split(remaining_text, threshold=self.threshold)
+                        segments = [first_sentence] + [seg.strip() for seg in remaining_segments if seg.strip()]
+                    else:
+                        segments = [first_sentence]
+                    return segments
+            
+            # 如果快速提取没有结果或未启用，使用原有逻辑
             segments = self.model.split(text, threshold=self.threshold)
-            # 移除空段落和纯空白段落
-            segments = [seg.strip() for seg in segments if seg.strip()]
-            return segments
+            return [seg.strip() for seg in segments if seg.strip()]
+            
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error during text segmentation: {e}")
             # 如果分段失败，回退到简单的标点符号分段
@@ -159,6 +231,64 @@ class TextSegmenter:
         finally:
             self._timing_stats.end("batch_segment_process")
     
+    def segment_stream(self, text: str, is_first: bool = False) -> List[str]:
+        """流式文本分段，针对流式返回的文本进行优化的分段方法
+        
+        Args:
+            text: 输入文本
+            is_first: 是否是第一段文本
+            
+        Returns:
+            分段后的文本列表，最后一个可能是不完整的句子
+        """
+        try:
+            self._timing_stats.start("segment_stream_process")
+            
+            # 如果是第一段文本且启用了快速首句提取
+            if is_first:
+                first_sentence, remaining_text = self._quick_first_sentence(text)
+                if first_sentence:
+                    if not remaining_text:
+                        return [first_sentence]
+                    text = remaining_text
+                    segments = [first_sentence]
+                else:
+                    segments = []
+            else:
+                segments = []
+            
+            # 找到最后一个句子的结束位置
+            last_punct_pos = self._find_last_sentence_break(text)
+            
+            if last_punct_pos > 0:
+                # 处理完整的句子部分
+                complete_text = text[:last_punct_pos]
+                try:
+                    complete_segments = self.model.split(complete_text, threshold=self.threshold)
+                    segments.extend([seg.strip() for seg in complete_segments if seg.strip()])
+                except Exception as e:
+                    logger.bind(tag=TAG).error(f"Error during model split: {e}")
+                    # 如果模型分段失败，使用简单的标点分段
+                    segments.extend(self._fallback_segment(complete_text))
+                
+                # 添加未完成的句子部分
+                remaining_text = text[last_punct_pos:].strip()
+                if remaining_text:
+                    segments.append(remaining_text)
+            else:
+                # 如果没有找到句子结束，整个文本作为未完成句子
+                if text.strip():
+                    segments.append(text.strip())
+            
+            return segments
+            
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"Error during stream segmentation: {e}")
+            # 如果分段失败，回退到简单的标点符号分段
+            return self._fallback_segment(text)
+        finally:
+            self._timing_stats.end("segment_stream_process")
+
     def _fallback_segment(self, text: str) -> List[str]:
         """简单的基于标点的分段方法，作为后备方案
         
