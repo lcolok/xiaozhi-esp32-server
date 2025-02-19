@@ -226,7 +226,7 @@ TTS:
     output_file: tmp/
     voice_setting:
       speed: 1.0
-      vol: 1.0
+      vol: 1.5
       pitch: 0
       emotion: happy
     audio_setting:
@@ -234,3 +234,9 @@ TTS:
       bitrate: 128000
       format: mp3
       channel: 1
+
+text_segmentation:
+  model_name: "sat-3l-sm"  # 使用3层小型模型，平衡性能和效果
+  threshold: 0.2  # 分段阈值，越高分段越保守
+  style_or_domain: "ud"  # 使用Universal Dependencies风格
+  language: "zh"  # 中文

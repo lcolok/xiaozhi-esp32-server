@@ -1,5 +1,4 @@
 pyyml==0.0.2
-torch==2.2.2
 silero_vad==5.1.2
 websockets==14.2
 opuslib==3.0.1
@@ -18,3 +17,5 @@ ruamel.yaml==0.18.10
 loguru==0.7.3
 python-dotenv==1.0.1
 setuptools==75.8.0
+wtpsplit @ git+https://github.com/segment-any-text/wtpsplit.git
+pandas>=2.0.0

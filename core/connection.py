@@ -18,6 +18,7 @@ from core.handle.audioHandle import handleAudioMessage, sendAudioMessage
 from config.private_config import PrivateConfig
 from core.auth import AuthMiddleware, AuthenticationError
 from core.utils.auth_code_gen import AuthCodeGenerator  # 添加导入
+from core.utils.text_segmentation import TextSegmenter
 
 TAG = __name__
 
@@ -81,7 +82,14 @@ class ConnectionHandler:
         self.private_config = None
         self.auth_code_gen = AuthCodeGenerator.get_instance()
         self.is_device_verified = False  # 添加设备验证状态标志
-
+        # 预先初始化 TextSegmenter，由于使用了单例模式，这只会在第一次调用时真正初始化
+        try:
+            start_time = time.time()
+            self.text_segmenter = TextSegmenter.get_instance(config)
+            init_time = time.time() - start_time
+            self.logger.bind(tag=TAG).info(f"TextSegmenter 预加载完成，耗时：{init_time:.2f}秒")
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"TextSegmenter 预加载失败: {e}")
 
     async def handle_connection(self, ws):
         try:
@@ -204,7 +212,8 @@ class ConnectionHandler:
         
         self.dialogue.put(Message(role="user", content=query))
         response_message = []
-        start = 0
+        current_text = ""
+        
         # 提交 LLM 任务
         try:
             start_time = time.time()  # 记录开始时间
@@ -212,33 +221,36 @@ class ConnectionHandler:
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"LLM 处理出错 {query}: {e}")
             return None
+
         # 提交 TTS 任务到线程池
         self.llm_finish_task = False
+        
         for content in llm_responses:
-            response_message.append(content)
-            # 如果中途被打断，就停止生成
             if self.client_abort:
-                start = len(response_message)
                 break
-
-            end_time = time.time()  # 记录结束时间
-            self.logger.bind(tag=TAG).debug(f"大模型返回时间时间: {end_time - start_time} 秒, 生成token={content}")
-            if is_segment(response_message):
-                segment_text = "".join(response_message[start:])
-                segment_text = get_string_no_punctuation_or_emoji(segment_text)
-                if len(segment_text) > 0:
-                    self.recode_first_last_text(segment_text)
-                    future = self.executor.submit(self.speak_and_play, segment_text)
+                
+            response_message.append(content)
+            current_text = "".join(response_message)
+            
+            # 使用新的分段器进行分段
+            segments = self.text_segmenter.segment(current_text)
+            
+            # 如果有完整的分段，处理除最后一个分段外的所有分段
+            if len(segments) > 1:
+                for segment in segments[:-1]:
+                    self.recode_first_last_text(segment)
+                    future = self.executor.submit(self.speak_and_play, segment)
                     self.tts_queue.put(future)
-                    start = len(response_message)
+                
+                # 保留最后一个分段，继续累积
+                current_text = segments[-1]
+                response_message = [current_text]
 
-        # 处理剩余的响应
-        if start < len(response_message):
-            segment_text = "".join(response_message[start:])
-            if len(segment_text) > 0:
-                self.recode_first_last_text(segment_text)
-                future = self.executor.submit(self.speak_and_play, segment_text)
-                self.tts_queue.put(future)
+        # 处理最后剩余的文本
+        if current_text and not self.client_abort:
+            self.recode_first_last_text(current_text)
+            future = self.executor.submit(self.speak_and_play, current_text)
+            self.tts_queue.put(future)
 
         self.llm_finish_task = True
         # 更新对话
