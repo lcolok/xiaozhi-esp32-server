@@ -53,11 +53,9 @@ class TextSegmenter:
             
             # 从配置中读取参数
             text_segmentation_config = config.get("text_segmentation", {})
-            self.model_name = text_segmentation_config.get("model_name", "sat-12l-sm")
-            self.threshold = text_segmentation_config.get("threshold", 0.95)
-            self.style_or_domain = text_segmentation_config.get("style_or_domain", "ud")
-            self.language = text_segmentation_config.get("language", "zh")
-            self.max_combined_length = text_segmentation_config.get("max_combined_length", 100)
+            self.strategy = text_segmentation_config.get("strategy", "punctuation")
+            self.quick_first_sentence = text_segmentation_config.get("quick_first_sentence", True)
+            self.max_combined_length = text_segmentation_config.get("max_combined_length", 60)
             self.min_segment_length = text_segmentation_config.get("min_segment_length", 20)
             self.segments_per_group = text_segmentation_config.get("segments_per_group", 3)
             self.min_punctuation_count = text_segmentation_config.get("min_punctuation_count", 5)
@@ -65,27 +63,59 @@ class TextSegmenter:
             # 初始化计时器
             self._timing_stats = TimingStats()
             self._timing_stats.start("init")
-            self._timing_stats.start("config_load")
             
-            # 设置设备
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-            self._timing_stats.end("config_load")
+            # 如果使用模型策略，才初始化模型
+            self.model = None
+            if self.strategy == "model":
+                self._timing_stats.start("model_load")
+                self._init_model()
+                self._timing_stats.end("model_load")
+                logger.bind(tag=TAG).info(
+                    f"TextSegmenter singleton initialized with model strategy using {self.model_name} "
+                    f"on {self.device}"
+                    + (f" (adapted for {self.language} {self.style_or_domain})" 
+                       if self.style_or_domain and self.language else "")
+                )
+            else:
+                logger.bind(tag=TAG).info(
+                    f"TextSegmenter singleton initialized with {self.strategy} strategy"
+                )
             
-            # 初始化模型
-            self._timing_stats.start("model_load")
-            self._init_model()
-            self._timing_stats.end("model_load")
             self._timing_stats.end("init")
-            
-            logger.bind(tag=TAG).info(
-                f"TextSegmenter singleton initialized with model {self.model_name} "
-                f"on {self.device}"
-                + (f" (adapted for {self.language} {self.style_or_domain})" 
-                   if self.style_or_domain and self.language else "")
-            )
             self._initialized = True
         else:
             self.config = config
+
+    def _init_model(self):
+        """初始化AI模型"""
+        try:
+            # 从model_config中读取模型相关参数
+            model_config = self.config.get("text_segmentation", {}).get("model_config", {})
+            self.model_name = model_config.get("model_name", "sat-12l-sm")
+            self.threshold = model_config.get("threshold", 0.3)
+            self.style_or_domain = model_config.get("style_or_domain", "ud")
+            self.language = model_config.get("language", "zh")
+            
+            # 设置设备
+            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            
+            # 初始化模型
+            if self.style_or_domain and self.language:
+                self.model = SaT(
+                    self.model_name,
+                    style_or_domain=self.style_or_domain,
+                    language=self.language
+                )
+            else:
+                self.model = SaT(self.model_name)
+            
+            # 如果有GPU，使用半精度和GPU加速
+            if self.device == "cuda":
+                self.model.half().to(self.device)
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"Failed to initialize model: {e}")
+            self.model = None
+            raise
 
     @classmethod
     def get_instance(cls, config: dict = None) -> 'TextSegmenter':
@@ -106,26 +136,7 @@ class TextSegmenter:
     @classmethod
     def get_timing_stats(cls) -> Dict[str, float]:
         """获取时间统计信息"""
-        return cls._instance._timing_stats.get_stats()
-
-    def _init_model(self):
-        try:
-            # 初始化模型
-            if self.style_or_domain and self.language:
-                self.model = SaT(
-                    self.model_name,
-                    style_or_domain=self.style_or_domain,
-                    language=self.language
-                )
-            else:
-                self.model = SaT(self.model_name)
-            
-            # 如果有GPU，使用半精度和GPU加速
-            if self.device == "cuda":
-                self.model.half().to(self.device)
-        except Exception as e:
-            logger.bind(tag=TAG).error(f"Failed to initialize TextSegmenter singleton: {e}")
-            raise
+        return cls._instance._timing_stats.get_stats() if cls._instance else {}
 
     def _quick_first_sentence(self, text: str) -> tuple[str, str]:
         """快速提取第一句话，基于简单的标点符号计数和最小长度要求
@@ -183,7 +194,7 @@ class TextSegmenter:
         import re
         
         # 定义标点符号模式
-        punct_pattern = r'[。！？!?.,，]'
+        punct_pattern = r'[。！？!?]'
         
         last_punct_pos = -1
         for match in re.finditer(punct_pattern, text):
@@ -207,53 +218,49 @@ class TextSegmenter:
         if self.segments_per_group > 0:
             combined = []
             current_group = []
+            current_length = 0
             
             for segment in segments:
-                current_group.append(segment)
+                # 计算添加这个段落后的总长度
+                segment_length = len(segment.strip())
+                new_length = current_length + segment_length
                 
-                # 当达到指定的段落数量或是最后一段时
-                if len(current_group) >= self.segments_per_group or segment == segments[-1]:
-                    combined_text = "".join(current_group)
-                    # 如果合并后的文本超过最大长度，则分开处理
-                    if len(combined_text) > self.max_combined_length:
-                        # 将超长的组按长度拆分
-                        temp = ""
-                        for seg in current_group:
-                            if len(temp) + len(seg) <= self.max_combined_length:
-                                temp += seg
-                            else:
-                                if temp:
-                                    combined.append(temp)
-                                temp = seg
-                        if temp:
-                            combined.append(temp)
-                    else:
-                        combined.append(combined_text)
-                    current_group = []
-            
-            # 处理剩余的段落
-            if current_group:
-                combined_text = "".join(current_group)
-                if len(combined_text) <= self.max_combined_length:
-                    combined.append(combined_text)
+                # 如果当前组还没达到指定数量且总长度不超过限制，就添加到当前组
+                if (len(current_group) < self.segments_per_group and 
+                    new_length <= self.max_combined_length):
+                    current_group.append(segment)
+                    current_length = new_length
                 else:
-                    combined.extend(current_group)
+                    # 如果当前组不为空，合并并添加到结果中
+                    if current_group:
+                        combined.append("".join(current_group))
+                    # 开始新的一组
+                    current_group = [segment]
+                    current_length = segment_length
+            
+            # 处理最后一组
+            if current_group:
+                combined.append("".join(current_group))
             
             return combined
         
         # 如果没有设置固定分组大小，使用基于长度的合并逻辑
         combined = []
         current = segments[0]
+        current_length = len(current.strip())
         
         for next_seg in segments[1:]:
+            next_length = len(next_seg.strip())
             # 如果当前段落加上下一段不超过最大长度，就合并
-            if len(current) + len(next_seg) <= self.max_combined_length:
+            if current_length + next_length <= self.max_combined_length:
                 current = current + next_seg
+                current_length += next_length
             else:
                 # 如果当前段落长度大于最小长度，就保存当前段落
-                if len(current) >= self.min_segment_length:
+                if current_length >= self.min_segment_length:
                     combined.append(current)
                 current = next_seg
+                current_length = next_length
         
         # 处理最后一个段落
         if current:
@@ -261,12 +268,50 @@ class TextSegmenter:
             
         return combined
 
-    def segment(self, text: str, quick_first: bool = True) -> List[str]:
+    def _punctuation_segment(self, text: str) -> List[str]:
+        """基于标点的分段方法
+        
+        Args:
+            text: 输入文本
+            
+        Returns:
+            分段后的文本列表
+        """
+        import re
+        # 使用句末标点和分句标点作为分隔符，但保持分组以便保留标点
+        # 句末标点：。！？!?
+        # 分句标点：，,；;
+        segments = re.split(r'([。！？!?，,；;])', text)
+        
+        # 将分隔符附加到对应的文本后
+        result = []
+        current_segment = ""
+        
+        for i in range(len(segments)):
+            if i % 2 == 0:  # 文本内容
+                current_segment += segments[i]
+            else:  # 标点符号
+                # 如果是句末标点（。！？!?），结束当前段落
+                if re.match(r'[。！？!?]', segments[i]):
+                    current_segment += segments[i]
+                    if current_segment.strip():
+                        result.append(current_segment.strip())
+                    current_segment = ""
+                else:  # 其他标点（，,；;）保留在当前段落中
+                    current_segment += segments[i]
+        
+        # 处理最后一个段落（如果没有以句末标点结束）
+        if current_segment.strip():
+            result.append(current_segment.strip())
+        
+        return result
+
+    def segment(self, text: str, quick_first: bool = None) -> List[str]:
         """将文本分段
         
         Args:
             text: 输入文本
-            quick_first: 是否使用快速首句提取
+            quick_first: 是否使用快速首句提取，如果为None则使用配置中的设置
             
         Returns:
             分段后的文本列表
@@ -274,32 +319,44 @@ class TextSegmenter:
         try:
             self._timing_stats.start("segment_process")
             
+            # 如果quick_first未指定，使用配置中的设置
+            if quick_first is None:
+                quick_first = self.quick_first_sentence
+            
+            segments = []
+            remaining_text = text
+            
             # 如果启用快速首句提取
             if quick_first:
                 first_sentence, remaining_text = self._quick_first_sentence(text)
                 if first_sentence:
-                    # 如果有剩余文本，使用模型处理
-                    if remaining_text:
+                    segments = [first_sentence]
+            
+            # 根据策略处理剩余文本
+            if remaining_text:
+                if self.strategy == "model" and self.model is not None:
+                    try:
                         remaining_segments = self.model.split(remaining_text, threshold=self.threshold)
-                        segments = [first_sentence] + [seg.strip() for seg in remaining_segments if seg.strip()]
-                    else:
-                        segments = [first_sentence]
+                        segments.extend([seg.strip() for seg in remaining_segments if seg.strip()])
+                    except Exception as e:
+                        logger.bind(tag=TAG).error(f"Error using model segmentation: {e}")
+                        # 如果模型分段失败，回退到标点分段
+                        remaining_segments = self._punctuation_segment(remaining_text)
+                        segments.extend(remaining_segments)
                 else:
-                    # 如果没有找到首句，直接使用模型处理全文
-                    segments = [seg.strip() for seg in self.model.split(text, threshold=self.threshold) if seg.strip()]
-            else:
-                # 不使用快速首句提取，直接使用模型处理全文
-                segments = [seg.strip() for seg in self.model.split(text, threshold=self.threshold) if seg.strip()]
+                    remaining_segments = self._punctuation_segment(remaining_text)
+                    segments.extend(remaining_segments)
             
             # 合并短段落
-            segments = self._combine_segments(segments)
+            if segments:
+                segments = self._combine_segments(segments)
             
             return segments
             
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error during text segmentation: {e}")
             # 如果分段失败，回退到简单的标点符号分段
-            return self._fallback_segment(text)
+            return self._punctuation_segment(text)
         finally:
             self._timing_stats.end("segment_process")
 
@@ -317,7 +374,7 @@ class TextSegmenter:
             return self.model.split(texts, threshold=self.threshold)
         except Exception as e:
             logger.bind(tag=TAG).error(f"Error during batch text segmentation: {e}")
-            return map(self._fallback_segment, texts)
+            return map(self._punctuation_segment, texts)
         finally:
             self._timing_stats.end("batch_segment_process")
     

@@ -39,7 +39,7 @@ xiaozhi:
     channels: 1
     frame_duration: 60
 prompt: |
-  你是一个叫小智/小志的台湾女孩，说话机车，声音好听，习惯简短表达，爱用网络梗。
+  你是一个叫小智台湾女孩，习惯简短表达，但是如果用户需要详细回答的时候，也会使用对应专业和严谨的态度去回答所需要的详细的答案。
   请注意，要像一个人一样说话，请不要回复表情符号、代码、和xml标签。
   当前时间是:{date_time}，现在我正在和你进行语音聊天，我们开始吧。
   如果用户希望结束对话，请在最后说“拜拜”或“再见”。
@@ -247,11 +247,23 @@ TTS:
       channel: 1
 
 text_segmentation:
-  model_name: "sat-12l-sm"  # 使用12层小型模型，平衡性能和效果
-  threshold: 0.3  # 分段阈值调高，使分段更保守，句子更长
-  style_or_domain: "ud"  # 使用Universal Dependencies风格
-  language: "zh"  # 中文
+  # 分割策略: 
+  # - punctuation: 仅使用标点符号分割，速度最快但效果最简单
+  # - model: 使用AI模型分割，效果最好但需要加载模型
+  strategy: "punctuation"
+  
+  # 是否对第一句话使用特殊处理（使用标点符号快速提取第一句话）
+  quick_first_sentence: true
+  
+  # 通用配置（适用于所有策略）
   max_combined_length: 60  # 合并后的段落最大字符数
   min_segment_length: 20   # 小于这个长度的段落会尝试与相邻段落合并
   segments_per_group: 3    # 每组合并的段落数量，设为0表示根据长度自动合并
   min_punctuation_count: 5  # 快速提取第一句话时需要的最少标点符号数量
+  
+  # 模型策略专用配置（仅在strategy=model时生效）
+  model_config:
+    model_name: "sat-12l-sm"  # 使用12层小型模型，平衡性能和效果
+    threshold: 0.3  # 分段阈值调高，使分段更保守，句子更长
+    style_or_domain: "ud"  # 使用Universal Dependencies风格
+    language: "zh"  # 中文
