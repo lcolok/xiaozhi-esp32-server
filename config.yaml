@@ -234,12 +234,12 @@ TTS:
     output_file: tmp/
     voice_setting:
       speed: 1.15
-      vol: 2
+      vol: 5
       pitch: 0
       # emotion: happy
     audio_setting:
       sample_rate: 24000
-      bitrate: 256000
+      bitrate: 128000
       format: mp3
       channel: 1
 
