@@ -233,26 +233,49 @@ class ConnectionHandler:
             response_message.append(content)
             current_text = "".join(response_message)
             
-            # 使用流式分段器进行分段
-            segments = self.text_segmenter.segment_stream(current_text, is_first_segment)
-            is_first_segment = False
+            # 尝试快速提取第一句话
+            first_sentence, remaining_text = self.text_segmenter._quick_first_sentence(current_text)
             
-            # 如果有完整的分段，处理除最后一个分段外的所有分段
-            if len(segments) > 1:
-                for segment in segments[:-1]:
-                    self.recode_first_last_text(segment)
-                    future = self.executor.submit(self.speak_and_play, segment)
-                    self.tts_queue.put(future)
+            # 如果找到了第一句话，立即发送并重置状态
+            if first_sentence and is_first_segment:
+                self.recode_first_last_text(first_sentence)
+                future = self.executor.submit(self.speak_and_play, first_sentence)
+                self.tts_queue.put(future)
                 
-                # 保留最后一个分段，继续累积
-                current_text = segments[-1]
-                response_message = [current_text]
+                # 重置当前文本为剩余部分
+                if remaining_text:
+                    current_text = remaining_text
+                    response_message = [current_text]
+                else:
+                    current_text = ""
+                    response_message = []
+                
+                is_first_segment = False
+                continue
+            
+            # 如果已经处理过第一句话，使用正常的分段逻辑
+            if not is_first_segment:
+                segments = self.text_segmenter._combine_segments(self.text_segmenter.segment(current_text, quick_first=False))
+                
+                # 如果有完整的分段，处理除最后一个分段外的所有分段
+                if len(segments) > 1:
+                    for segment in segments[:-1]:
+                        if not segment.strip():  # 跳过空白段落
+                            continue
+                        self.recode_first_last_text(segment)
+                        future = self.executor.submit(self.speak_and_play, segment)
+                        self.tts_queue.put(future)
+                    
+                    # 保留最后一个分段，继续累积
+                    current_text = segments[-1]
+                    response_message = [current_text]
 
         # 处理最后剩余的文本
         if current_text and not self.client_abort:
-            self.recode_first_last_text(current_text)
-            future = self.executor.submit(self.speak_and_play, current_text)
-            self.tts_queue.put(future)
+            if current_text.strip():  # 确保最后一段不是空白
+                self.recode_first_last_text(current_text)
+                future = self.executor.submit(self.speak_and_play, current_text)
+                self.tts_queue.put(future)
 
         self.llm_finish_task = True
         # 更新对话

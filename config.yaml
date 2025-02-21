@@ -62,7 +62,7 @@ selected_module:
   ASR: FunASR
   VAD: SileroVAD
   # 将根据配置名称对应的type调用实际的LLM适配器
-  LLM: SiliconflowLLM
+  LLM: VolcengineLLM
   # TTS将根据配置名称对应的type调用实际的TTS适配器
   TTS: MiniMaxTTS
 
@@ -79,10 +79,18 @@ VAD:
 
 LLM:
   # 当前支持的type为openai、dify、ollama，可自行适配
+  VolcengineLLM:
+    # 定义LLM API类型
+    type: openai
+    # model_name: Qwen/Qwen2.5-72B-Instruct
+    model_name: deepseek-v3-241226
+    url: https://ark.cn-beijing.volces.com/api/v3
+    api_key: ${VOLCENGINE_API_KEY}
   SiliconflowLLM:
     # 定义LLM API类型
     type: openai
-    model_name: Qwen/Qwen2.5-72B-Instruct
+    # model_name: Qwen/Qwen2.5-72B-Instruct
+    model_name: Pro/deepseek-ai/DeepSeek-V3
     url: https://api.siliconflow.cn/v1
     api_key: ${SILICONFLOW_API_KEY}
   AliLLM:
@@ -225,18 +233,22 @@ TTS:
     api_key: ${MINIMAX_API_KEY}
     output_file: tmp/
     voice_setting:
-      speed: 1.0
-      vol: 1.5
+      speed: 1.15
+      vol: 2
       pitch: 0
-      emotion: happy
+      # emotion: happy
     audio_setting:
-      sample_rate: 32000
-      bitrate: 128000
+      sample_rate: 24000
+      bitrate: 256000
       format: mp3
       channel: 1
 
 text_segmentation:
-  model_name: "sat-3l-sm"  # 使用3层小型模型，平衡性能和效果
-  threshold: 0.2  # 分段阈值，越高分段越保守
+  model_name: "sat-12l-sm"  # 使用12层小型模型，平衡性能和效果
+  threshold: 0.3  # 分段阈值调高，使分段更保守，句子更长
   style_or_domain: "ud"  # 使用Universal Dependencies风格
   language: "zh"  # 中文
+  max_combined_length: 60  # 合并后的段落最大字符数
+  min_segment_length: 20   # 小于这个长度的段落会尝试与相邻段落合并
+  segments_per_group: 3    # 每组合并的段落数量，设为0表示根据长度自动合并
+  min_punctuation_count: 5  # 快速提取第一句话时需要的最少标点符号数量
