@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from config.logger import setup_logging
 from typing import Optional, Tuple, List
 import uuid
+import requests
 
 import opuslib
 from funasr import AutoModel
@@ -102,10 +103,90 @@ class FunASR(ASR):
                     logger.bind(tag=TAG).error(f"文件删除失败: {file_path} | 错误: {e}")
 
 
+class SiliconflowASR(ASR):
+    def __init__(self, config: dict, delete_audio_file: bool):
+        self.api_key = os.getenv("SILICONFLOW_API_KEY")
+        if not self.api_key:
+            raise ValueError("SILICONFLOW_API_KEY environment variable is not set")
+        self.output_dir = config.get("output_dir")
+        self.delete_audio_file = delete_audio_file
+        self.model = config.get("model", "FunAudioLLM/SenseVoiceSmall")
+        
+        # 确保输出目录存在
+        os.makedirs(self.output_dir, exist_ok=True)
+
+    def save_audio_to_file(self, opus_data: List[bytes], session_id: str) -> str:
+        """将Opus音频数据解码并保存为WAV文件"""
+        file_name = f"asr_{session_id}_{uuid.uuid4()}.wav"
+        file_path = os.path.join(self.output_dir, file_name)
+
+        decoder = opuslib.Decoder(16000, 1)  # 16kHz, 单声道
+        pcm_data = []
+
+        for opus_packet in opus_data:
+            try:
+                pcm_frame = decoder.decode(opus_packet, 960)  # 960 samples = 60ms
+                pcm_data.append(pcm_frame)
+            except opuslib.OpusError as e:
+                logger.bind(tag=TAG).error(f"Opus解码错误: {e}", exc_info=True)
+
+        with wave.open(file_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)  # 2 bytes = 16-bit
+            wf.setframerate(16000)
+            wf.writeframes(b"".join(pcm_data))
+
+        return file_path
+
+    def speech_to_text(self, opus_data: List[bytes], session_id: str) -> Tuple[Optional[str], Optional[str]]:
+        """语音转文本主处理逻辑"""
+        file_path = None
+        try:
+            # 保存音频文件
+            start_time = time.time()
+            file_path = self.save_audio_to_file(opus_data, session_id)
+            logger.bind(tag=TAG).debug(f"音频文件保存耗时: {time.time() - start_time:.3f}s | 路径: {file_path}")
+
+            # 调用Siliconflow ASR API
+            start_time = time.time()
+            url = "https://api.siliconflow.cn/v1/audio/transcriptions"
+            
+            headers = {
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            
+            files = {
+                "file": ("audio.wav", open(file_path, "rb"), "audio/wav"),
+                "model": (None, self.model)
+            }
+
+            response = requests.post(url, headers=headers, files=files)
+            response.raise_for_status()
+            
+            text = response.json().get("text", "")
+            logger.bind(tag=TAG).debug(f"语音识别耗时: {time.time() - start_time:.3f}s | 结果: {text}")
+
+            return text, file_path
+
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"语音识别失败: {e}", exc_info=True)
+            return None, None
+
+        finally:
+            # 文件清理逻辑
+            if self.delete_audio_file and file_path and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                    logger.bind(tag=TAG).debug(f"已删除临时音频文件: {file_path}")
+                except Exception as e:
+                    logger.bind(tag=TAG).error(f"文件删除失败: {file_path} | 错误: {e}")
+
+
 def create_instance(class_name: str, *args, **kwargs) -> ASR:
     """工厂方法创建ASR实例"""
     cls_map = {
         "FunASR": FunASR,
+        "SiliconflowASR": SiliconflowASR,
         # 可扩展其他ASR实现
     }
 

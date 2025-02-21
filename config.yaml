@@ -59,7 +59,7 @@ CMD_exit:
 
 # 具体处理时选择的模块(The module selected for specific processing)
 selected_module:
-  ASR: FunASR
+  ASR: SiliconflowASR
   VAD: SileroVAD
   # 将根据配置名称对应的type调用实际的LLM适配器
   LLM: VolcengineLLM
@@ -69,6 +69,9 @@ selected_module:
 ASR:
   FunASR:
     model_dir: models/SenseVoiceSmall
+    output_dir: tmp/
+  SiliconflowASR:
+    model: FunAudioLLM/SenseVoiceSmall
     output_dir: tmp/
 
 VAD:
