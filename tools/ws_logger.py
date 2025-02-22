@@ -2,6 +2,14 @@ from mitmproxy import ctx
 from mitmproxy.websocket import WebSocketMessage
 import json
 from datetime import datetime
+from collections import defaultdict
+
+# 用于跟踪二进制消息的统计信息
+binary_stats = {
+    'client_to_server': {'count': 0, 'total_bytes': 0},
+    'server_to_client': {'count': 0, 'total_bytes': 0},
+    'last_print_time': datetime.now()
+}
 
 def format_message(content):
     try:
@@ -9,78 +17,59 @@ def format_message(content):
         parsed = json.loads(content)
         return json.dumps(parsed, indent=2, ensure_ascii=False)
     except:
-        # 如果不是 JSON，返回原始内容
         return content
 
+def print_binary_stats():
+    c2s = binary_stats['client_to_server']
+    s2c = binary_stats['server_to_client']
+    
+    if c2s['count'] > 0 or s2c['count'] > 0:
+        stats_message = f"Binary: C→S: {c2s['count']}条 ({c2s['total_bytes']/1024:.1f}KB) | S→C: {s2c['count']}条 ({s2c['total_bytes']/1024:.1f}KB)"
+        ctx.log.info(stats_message)
+        # 重置统计
+        c2s['count'] = 0
+        c2s['total_bytes'] = 0
+        s2c['count'] = 0
+        s2c['total_bytes'] = 0
+        binary_stats['last_print_time'] = datetime.now()
+
 def websocket_message(flow):
-    # 确保是 WebSocket 连接
     if flow.websocket:
-        # 获取最新的消息
         message = flow.websocket.messages[-1]
+        direction = "C→S" if message.from_client else "S→C"
+        stats_key = 'client_to_server' if message.from_client else 'server_to_client'
         
-        # 确定消息方向
-        direction = "Client → Server" if message.from_client else "Server → Client"
-        
-        # 格式化时间戳
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        
-        # 尝试解码消息内容
         try:
             content = message.content.decode('utf-8')
             formatted_content = format_message(content)
+            # 只打印非单字符的文本消息
+            if len(content.strip()) > 1:
+                log_message = f"{direction}\n{formatted_content}"
+                ctx.log.info(log_message)
         except:
-            formatted_content = f"Binary message, length: {len(message.content)} bytes"
-        
-        # 打印带格式的消息
-        log_message = f"""
-{'=' * 50}
-{timestamp} {direction}
-{formatted_content}
-{'=' * 50}
-"""
-        ctx.log.info(log_message)
+            # 累计二进制消息统计
+            binary_stats[stats_key]['count'] += 1
+            binary_stats[stats_key]['total_bytes'] += len(message.content)
+            
+            time_diff = (datetime.now() - binary_stats['last_print_time']).total_seconds()
+            total_messages = (binary_stats['client_to_server']['count'] + 
+                            binary_stats['server_to_client']['count'])
+            
+            if time_diff >= 10 or total_messages >= 100:
+                print_binary_stats()
 
 def websocket_connected(flow):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    ctx.log.info(f"\n{timestamp} WebSocket connection established")
-    ctx.log.info(f"Client address: {flow.client_conn.address}")
-    ctx.log.info(f"Server address: {flow.server_conn.address}")
-    ctx.log.info(f"Request URL: {flow.request.pretty_url}")
-    ctx.log.info("\nRequest headers:")
-    for header, value in flow.request.headers.items():
-        ctx.log.info(f"  {header}: {value}")
-    if hasattr(flow, 'response') and flow.response:
-        ctx.log.info("\nResponse headers:")
-        for header, value in flow.response.headers.items():
-            ctx.log.info(f"  {header}: {value}")
+    ctx.log.info(f"WebSocket connected: {flow.request.pretty_url}")
 
 def websocket_error(flow):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    ctx.log.error(f"\n{timestamp} WebSocket error occurred")
-    if hasattr(flow, 'error'):
-        ctx.log.error(f"Error details: {flow.error}")
+    ctx.log.error(f"WebSocket error: {flow.error if hasattr(flow, 'error') else 'Unknown error'}")
 
 def websocket_closed(flow):
     if flow.websocket:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-        ctx.log.info(f"\n{timestamp} WebSocket connection closed")
-        if hasattr(flow.websocket, 'close_code'):
-            ctx.log.info(f"Close code: {flow.websocket.close_code}")
-        if hasattr(flow.websocket, 'close_reason'):
-            ctx.log.info(f"Close reason: {flow.websocket.close_reason}")
+        ctx.log.info("WebSocket closed")
 
 def request(flow):
-    # 记录所有请求，不仅仅是WebSocket
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    ctx.log.info(f"\n{timestamp} New request: {flow.request.method} {flow.request.pretty_url}")
-    ctx.log.info("Request headers:")
-    for header, value in flow.request.headers.items():
-        ctx.log.info(f"  {header}: {value}")
+    ctx.log.info(f"{flow.request.method} {flow.request.pretty_url}")
 
 def response(flow):
-    # 记录所有响应
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-    ctx.log.info(f"\n{timestamp} Response: {flow.response.status_code}")
-    ctx.log.info("Response headers:")
-    for header, value in flow.response.headers.items():
-        ctx.log.info(f"  {header}: {value}")
+    ctx.log.info(f"Response: {flow.response.status_code}")
