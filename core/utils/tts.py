@@ -8,13 +8,18 @@ from core.utils.util import read_config, get_project_dir
 logger = setup_logging()
 
 
-def create_instance(class_name, *args, **kwargs):
+def create_instance(class_name, config, delete_audio):
     # 创建TTS实例
     if os.path.exists(os.path.join('core', 'providers', 'tts', f'{class_name}.py')):
         lib_name = f'core.providers.tts.{class_name}'
         if lib_name not in sys.modules:
             sys.modules[lib_name] = importlib.import_module(f'{lib_name}')
-        return sys.modules[lib_name].TTSProvider(*args, **kwargs)
+        
+        # 构建完整的配置
+        tts_config = config.copy()  # 复制TTS配置
+        tts_config['xiaozhi'] = read_config(get_project_dir() + "config.yaml").get('xiaozhi', {})  # 添加xiaozhi配置
+        
+        return sys.modules[lib_name].TTSProvider(tts_config, delete_audio)
 
     raise ValueError(f"不支持的TTS类型: {class_name}，请检查该配置的type是否设置正确")
 

@@ -14,7 +14,16 @@ TAG = __name__
 
 class TTSProvider(TTSProviderBase):
     def __init__(self, config: Dict[str, Any], delete_audio_file: bool):
+        # 确保配置中包含完整的xiaozhi配置
+        if 'xiaozhi' not in config:
+            config['xiaozhi'] = {}
+        
+        # 初始化基类
         super().__init__(config, delete_audio_file)
+        
+        # 记录音频增益设置
+        logger.bind(tag=TAG).info(f"MiniMax TTS初始化 - 音量增益: {self.gain}倍")
+        
         self.base_url = config.get('base_url')
         self.group_id = config.get('group_id')
         self.api_key = config.get('api_key')
@@ -27,10 +36,10 @@ class TTSProvider(TTSProviderBase):
             'emotion': 'happy'
         })
         self.audio_setting = config.get('audio_setting', {
-            'sample_rate': 32000,
+            'sample_rate': self.sample_rate,  # 使用从基类继承的采样率
             'bitrate': 128000,
             'format': 'mp3',
-            'channel': 1
+            'channel': self.channels  # 使用从基类继承的声道数
         })
         self.output_file = config.get('output_file', 'tmp/')
         os.makedirs(self.output_file, exist_ok=True)

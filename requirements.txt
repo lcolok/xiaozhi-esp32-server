@@ -19,3 +19,4 @@ python-dotenv==1.0.1
 setuptools==75.8.0
 wtpsplit @ git+https://github.com/segment-any-text/wtpsplit.git
 pandas>=2.0.0
+librosa==0.10.1
