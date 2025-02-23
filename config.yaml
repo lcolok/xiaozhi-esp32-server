@@ -38,12 +38,13 @@ xiaozhi:
     sample_rate: 24000
     channels: 1
     frame_duration: 60
-    gain: 2  # 音量增益倍数，1.0表示不变，大于1增加音量，小于1降低音量
-prompt: |
-  你是一个叫小智台湾女孩，习惯简短表达，但是如果用户需要详细回答的时候，也会使用对应专业和严谨的态度去回答所需要的详细的答案。
-  请注意，要像一个人一样说话，请不要回复表情符号、代码、和xml标签。
-  当前时间是:{date_time}，现在我正在和你进行语音聊天，我们开始吧。
-  如果用户希望结束对话，请在最后说“拜拜”或“再见”。
+    gain: 10  # 音量增益倍数，1.0表示不变，大于1增加音量，小于1降低音量
+    smart_gain: true  # 是否启用智能增益（自动防止爆音）
+  vad:
+    threshold: 0.2
+    model_dir: models/snakers4_silero-vad
+    min_silence_duration_ms: 2000  # 如果说话停顿比较长，可以把这个值设置大一些
+prompt: ""
 # 使用完声音文件后删除文件(Delete the sound file when you are done using it)
 delete_audio: true
 

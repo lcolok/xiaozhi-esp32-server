@@ -17,24 +17,26 @@ logger = setup_logging()
 
 class TTSProviderBase(ABC):
     def __init__(self, config, delete_audio_file):
+        """初始化TTS基础类"""
+        self.config = config
         self.delete_audio_file = delete_audio_file
-        self.output_file = config.get("output_file")
-        self.supports_streaming = False  # 默认不支持流式输出
         
-        # 从配置中获取音频参数
+        # 优先从xiaozhi配置中获取音频参数
         xiaozhi_config = config.get("xiaozhi", {})
         xiaozhi_audio_params = xiaozhi_config.get("audio_params", {})
         
-        # 从客户端参数或默认值获取基本音频参数
+        # 从客户端参数获取基本音频参数，如果没有则使用xiaozhi配置或默认值
         client_audio_params = config.get("audio_params", {})
-        self.sample_rate = client_audio_params.get("sample_rate", xiaozhi_audio_params.get("sample_rate", 24000))
-        self.channels = client_audio_params.get("channels", xiaozhi_audio_params.get("channels", 1))
-        self.frame_duration = client_audio_params.get("frame_duration", xiaozhi_audio_params.get("frame_duration", 60))
+        self.format = client_audio_params.get("format", xiaozhi_audio_params.get("format", "opus"))
+        self.sample_rate = int(client_audio_params.get("sample_rate", xiaozhi_audio_params.get("sample_rate", 24000)))
+        self.channels = int(client_audio_params.get("channels", xiaozhi_audio_params.get("channels", 1)))
+        self.frame_duration = int(client_audio_params.get("frame_duration", xiaozhi_audio_params.get("frame_duration", 60)))
         
-        # 增益参数始终从xiaozhi配置中获取
+        # 增益相关参数始终从xiaozhi配置中获取
         self.gain = float(xiaozhi_audio_params.get("gain", 1.0))
+        self.smart_gain = bool(xiaozhi_audio_params.get("smart_gain", True))
         
-        logger.bind(tag=TAG).info(f"初始化音频参数 - 采样率: {self.sample_rate}Hz, 声道: {self.channels}, 帧时长: {self.frame_duration}ms, 增益: {self.gain}倍")
+        logger.bind(tag=TAG).info(f"初始化音频参数 - 采样率: {self.sample_rate}Hz, 声道: {self.channels}, 帧时长: {self.frame_duration}ms, 增益: {self.gain}倍, 智能增益: {'开启' if self.smart_gain else '关闭'}")
 
     @abstractmethod
     def generate_filename(self):
@@ -71,43 +73,52 @@ class TTSProviderBase(ABC):
         """
         raise NotImplementedError("This TTS provider does not support streaming")
 
-    def _apply_audio_gain(self, audio: AudioSegment) -> AudioSegment:
-        """应用音量增益，并防止爆音"""
-        if self.gain == 1.0:
-            return audio
+    def _apply_gain(self, audio_segment):
+        """应用音量增益，支持智能增益控制"""
+        # 获取音频统计信息
+        rms_before = audio_segment.rms
+        dbfs_before = audio_segment.dBFS
+        max_amp_before = audio_segment.max
+        
+        # 检查增益是否合理
+        if self.gain <= 0:
+            logger.bind(tag=TAG).warning(f"增益值 {self.gain} 不合法，将使用默认值 1.0")
+            self.gain = 1.0
+        
+        # 记录原始音频信息
+        logger.bind(tag=TAG).info(f"原始音频 - 格式: {audio_segment.channels}, 采样率: {audio_segment.frame_rate}Hz, 声道: {audio_segment.channels}, RMS: {rms_before}dB, dBFS: {dbfs_before}dB, 最大振幅: {max_amp_before}")
+        
+        # 根据智能增益开关决定处理方式
+        target_gain = self.gain
+        if self.smart_gain:
+            if max_amp_before > 0:
+                max_gain = 32767.0 / max_amp_before  # 计算不会导致截幅的最大增益
+                safe_gain = min(self.gain, max_gain * 0.9)  # 留出10%的余量
+                
+                if safe_gain < self.gain:
+                    logger.bind(tag=TAG).warning(f"智能增益：原始增益值 {self.gain} 可能导致失真，已自动调整为 {safe_gain:.2f}")
+                    target_gain = safe_gain
+        else:
+            if self.gain > 10.0:
+                logger.bind(tag=TAG).warning(f"增益值 {self.gain} 过大，可能导致音频失真")
+            target_gain = self.gain
+        
+        # 应用增益
+        logger.bind(tag=TAG).info(f"应用音量增益 - 目标增益: {target_gain}倍 (智能增益: {'开启' if self.smart_gain else '关闭'})")
+        
+        try:
+            # 使用 pydub 内置的增益功能
+            gain_db = 20 * math.log10(target_gain)
+            audio_segment = audio_segment.apply_gain(gain_db)
             
-        # 记录处理前的音量信息
-        logger.bind(tag=TAG).info(f"音量增益处理前 - RMS: {audio.rms}dB, dBFS: {audio.dBFS}dB, Max Amplitude: {audio.max}")
-        
-        # 将 AudioSegment 转换为 numpy array
-        samples = np.array(audio.get_array_of_samples())
-        
-        # 转换为 float32，范围 [-1, 1]
-        samples = samples.astype(np.float32) / 32768.0
-        
-        # 使用 librosa 的 normalize 函数进行音量增益
-        # ref_db 参数控制目标音量大小
-        target_db = 20 * math.log10(self.gain)
-        processed_samples = librosa.util.normalize(samples, norm=np.inf, ref_db=target_db)
-        
-        # 应用动态范围压缩，防止爆音
-        processed_samples = librosa.effects.preemphasis(processed_samples)
-        
-        # 转回 int16 范围
-        processed_samples = np.clip(processed_samples * 32768.0, -32768, 32767).astype(np.int16)
-        
-        # 将处理后的数据转回 AudioSegment
-        processed_audio = AudioSegment(
-            processed_samples.tobytes(),
-            frame_rate=audio.frame_rate,
-            sample_width=2,
-            channels=audio.channels
-        )
-        
-        # 记录处理后的音量信息
-        logger.bind(tag=TAG).info(f"音量增益处理后 - RMS: {processed_audio.rms}dB, dBFS: {processed_audio.dBFS}dB, Max Amplitude: {processed_audio.max}")
-        
-        return processed_audio
+            # 记录处理后的音频统计信息
+            logger.bind(tag=TAG).info(f"增益后 - RMS: {audio_segment.rms}dB, dBFS: {audio_segment.dBFS}dB, 最大振幅: {audio_segment.max}")
+            
+            return audio_segment
+            
+        except Exception as e:
+            logger.bind(tag=TAG).error(f"应用音量增益失败: {str(e)}")
+            return audio_segment  # 如果处理失败，返回原始音频
 
     def wav_to_opus_data(self, wav_file_path) -> Tuple[List[bytes], float]:
         """将 WAV 文件转换为 Opus 数据包列表和持续时间"""
@@ -124,9 +135,7 @@ class TTSProviderBase(ABC):
         if abs(self.gain - 1.0) > 0.01:  # 如果增益不等于1.0（考虑浮点数比较）
             logger.bind(tag=TAG).info(f"应用音量增益 - 目标增益: {self.gain}倍")
             try:
-                # 将增益值转换为dB并应用
-                gain_db = 20 * math.log10(self.gain)
-                audio = audio.apply_gain(gain_db)
+                audio = self._apply_gain(audio)
                 logger.bind(tag=TAG).info(f"增益后 - RMS: {audio.rms}dB, dBFS: {audio.dBFS}dB")
             except Exception as e:
                 logger.bind(tag=TAG).error(f"应用音量增益失败: {str(e)}")
@@ -166,7 +175,7 @@ class TTSProviderBase(ABC):
         )
 
         # 应用音量增益
-        audio = self._apply_audio_gain(audio)
+        audio = self._apply_gain(audio)
 
         duration = len(audio) / 1000.0
         raw_data = audio.raw_data
