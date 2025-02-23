@@ -23,7 +23,7 @@ echo -e "${GREEN}Proxy will be available at ws://localhost:27182${NC}"
 echo -e "${GREEN}Web interface will be available at http://127.0.0.1:8081${NC}"
 
 # 使用虚拟环境中的mitmweb
-/root/xiaozhi-esp32-server/.venv/bin/mitmweb \
+./.venv/bin/mitmweb \
     -s ws_logger.py \
     --mode reverse:https://api.tenclass.net \
     --listen-port 27182 \
