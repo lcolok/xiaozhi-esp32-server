@@ -16,6 +16,12 @@ class TTSProviderBase(ABC):
         self.delete_audio_file = delete_audio_file
         self.output_file = config.get("output_file")
         self.supports_streaming = False  # 默认不支持流式输出
+        
+        # 从配置中获取音频参数
+        audio_params = config.get("xiaozhi", {}).get("audio_params", {})
+        self.sample_rate = audio_params.get("sample_rate", 24000)
+        self.channels = audio_params.get("channels", 1)
+        self.frame_duration = audio_params.get("frame_duration", 60)
 
     @abstractmethod
     def generate_filename(self):
@@ -62,16 +68,15 @@ class TTSProviderBase(ABC):
 
         duration = len(audio) / 1000.0
 
-        # 转换为单声道和16kHz采样率
-        audio = audio.set_channels(1).set_frame_rate(16000)
+        # 转换为配置的声道数和采样率
+        audio = audio.set_channels(self.channels).set_frame_rate(self.sample_rate)
         raw_data = audio.raw_data
 
         # 初始化Opus编码器
-        encoder = opuslib.Encoder(16000, 1, opuslib.APPLICATION_AUDIO)
+        encoder = opuslib.Encoder(self.sample_rate, self.channels, opuslib.APPLICATION_AUDIO)
 
         # 编码参数
-        frame_duration = 60  # 60ms per frame
-        frame_size = int(16000 * frame_duration / 1000)  # 960 samples/frame
+        frame_size = int(self.sample_rate * self.frame_duration / 1000)
 
         opus_datas = []
         # 按帧处理音频数据
@@ -91,19 +96,21 @@ class TTSProviderBase(ABC):
         audio = AudioSegment(
             data=audio_data,
             sample_width=2,  # 16-bit
-            frame_rate=16000,
-            channels=1
+            frame_rate=self.sample_rate,
+            channels=self.channels
         )
 
         duration = len(audio) / 1000.0
         raw_data = audio.raw_data
 
         # 初始化Opus编码器
-        encoder = opuslib.Encoder(16000, 1, opuslib.APPLICATION_AUDIO)
-        frame_duration = 60
-        frame_size = int(16000 * frame_duration / 1000)
+        encoder = opuslib.Encoder(self.sample_rate, self.channels, opuslib.APPLICATION_AUDIO)
+
+        # 编码参数
+        frame_size = int(self.sample_rate * self.frame_duration / 1000)
 
         opus_datas = []
+        # 按帧处理音频数据
         for i in range(0, len(raw_data), frame_size * 2):
             chunk = raw_data[i:i + frame_size * 2]
             if len(chunk) < frame_size * 2:

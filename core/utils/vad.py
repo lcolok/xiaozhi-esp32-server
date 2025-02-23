@@ -9,6 +9,15 @@ TAG = __name__
 logger = setup_logging()
 
 class VAD(ABC):
+    def __init__(self, config):
+        self.config = config
+        audio_params = config.get("xiaozhi", {}).get("audio_params", {})
+        self.sample_rate = audio_params.get("sample_rate", 24000)
+        self.channels = audio_params.get("channels", 1)
+        self.frame_duration = audio_params.get("frame_duration", 60)
+        self.frame_size = int(self.sample_rate * self.frame_duration / 1000)
+        self.decoder = opuslib.Decoder(self.sample_rate, self.channels)
+
     @abstractmethod
     def is_vad(self, conn, data):
         """检测音频数据中的语音活动"""
@@ -17,6 +26,7 @@ class VAD(ABC):
 
 class SileroVAD(VAD):
     def __init__(self, config):
+        super().__init__(config)
         logger.bind(tag=TAG).info("SileroVAD", config)
         self.model, self.utils = torch.hub.load(repo_or_dir=config["model_dir"],
                                                 source='local',
@@ -24,13 +34,12 @@ class SileroVAD(VAD):
                                                 force_reload=False)
         (get_speech_timestamps, _, _, _, _) = self.utils
 
-        self.decoder = opuslib.Decoder(16000, 1)
         self.vad_threshold = config.get("threshold")
         self.silence_threshold_ms = config.get("min_silence_duration_ms")
 
     def is_vad(self, conn, opus_packet):
         try:
-            pcm_frame = self.decoder.decode(opus_packet, 960)
+            pcm_frame = self.decoder.decode(opus_packet, self.frame_size)
             conn.client_audio_buffer += pcm_frame  # 将新数据加入缓冲区
 
             # 处理缓冲区中的完整帧（每次处理512采样点）

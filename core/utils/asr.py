@@ -26,8 +26,42 @@ class ASR(ABC):
         pass
 
 
-class FunASR(ASR):
+class ASRProviderBase(ABC):
+    def __init__(self, config):
+        self.config = config
+        audio_params = config.get("xiaozhi", {}).get("audio_params", {})
+        self.sample_rate = audio_params.get("sample_rate", 24000)
+        self.channels = audio_params.get("channels", 1)
+        self.frame_duration = audio_params.get("frame_duration", 60)
+        self.frame_size = int(self.sample_rate * self.frame_duration / 1000)
+
+    def save_audio_to_file(self, opus_data: List[bytes], session_id: str) -> str:
+        """将Opus音频数据解码并保存为WAV文件"""
+        file_path = f"data/asr_{session_id}.wav"
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
+        decoder = opuslib.Decoder(self.sample_rate, self.channels)
+        pcm_data = bytearray()
+
+        for opus_packet in opus_data:
+            try:
+                pcm_frame = decoder.decode(opus_packet, self.frame_size)
+                pcm_data.extend(pcm_frame)
+            except opuslib.OpusError as e:
+                logger.bind(tag=TAG).error(f"Opus解码错误: {e}", exc_info=True)
+
+        with wave.open(file_path, "wb") as wf:
+            wf.setnchannels(self.channels)
+            wf.setsampwidth(2)  # 2 bytes = 16-bit
+            wf.setframerate(self.sample_rate)
+            wf.writeframes(pcm_data)
+
+        return file_path
+
+
+class FunASR(ASRProviderBase):
     def __init__(self, config: dict, delete_audio_file: bool):
+        super().__init__(config)
         self.model_dir = config.get("model_dir")
         self.output_dir = config.get("output_dir")  # 修正配置键名
         self.delete_audio_file = delete_audio_file
@@ -42,29 +76,6 @@ class FunASR(ASR):
             hub="hf"
             # device="cuda:0",  # 启用GPU加速
         )
-
-    def save_audio_to_file(self, opus_data: List[bytes], session_id: str) -> str:
-        """将Opus音频数据解码并保存为WAV文件"""
-        file_name = f"asr_{session_id}_{uuid.uuid4()}.wav"
-        file_path = os.path.join(self.output_dir, file_name)
-
-        decoder = opuslib.Decoder(16000, 1)  # 16kHz, 单声道
-        pcm_data = []
-
-        for opus_packet in opus_data:
-            try:
-                pcm_frame = decoder.decode(opus_packet, 960)  # 960 samples = 60ms
-                pcm_data.append(pcm_frame)
-            except opuslib.OpusError as e:
-                logger.bind(tag=TAG).error(f"Opus解码错误: {e}", exc_info=True)
-
-        with wave.open(file_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 2 bytes = 16-bit
-            wf.setframerate(16000)
-            wf.writeframes(b"".join(pcm_data))
-
-        return file_path
 
     def speech_to_text(self, opus_data: List[bytes], session_id: str) -> Tuple[Optional[str], Optional[str]]:
         """语音转文本主处理逻辑"""
@@ -103,8 +114,9 @@ class FunASR(ASR):
                     logger.bind(tag=TAG).error(f"文件删除失败: {file_path} | 错误: {e}")
 
 
-class SiliconflowASR(ASR):
+class SiliconflowASR(ASRProviderBase):
     def __init__(self, config: dict, delete_audio_file: bool):
+        super().__init__(config)
         self.api_key = os.getenv("SILICONFLOW_API_KEY")
         if not self.api_key:
             raise ValueError("SILICONFLOW_API_KEY environment variable is not set")
@@ -114,29 +126,6 @@ class SiliconflowASR(ASR):
         
         # 确保输出目录存在
         os.makedirs(self.output_dir, exist_ok=True)
-
-    def save_audio_to_file(self, opus_data: List[bytes], session_id: str) -> str:
-        """将Opus音频数据解码并保存为WAV文件"""
-        file_name = f"asr_{session_id}_{uuid.uuid4()}.wav"
-        file_path = os.path.join(self.output_dir, file_name)
-
-        decoder = opuslib.Decoder(16000, 1)  # 16kHz, 单声道
-        pcm_data = []
-
-        for opus_packet in opus_data:
-            try:
-                pcm_frame = decoder.decode(opus_packet, 960)  # 960 samples = 60ms
-                pcm_data.append(pcm_frame)
-            except opuslib.OpusError as e:
-                logger.bind(tag=TAG).error(f"Opus解码错误: {e}", exc_info=True)
-
-        with wave.open(file_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 2 bytes = 16-bit
-            wf.setframerate(16000)
-            wf.writeframes(b"".join(pcm_data))
-
-        return file_path
 
     def speech_to_text(self, opus_data: List[bytes], session_id: str) -> Tuple[Optional[str], Optional[str]]:
         """语音转文本主处理逻辑"""
