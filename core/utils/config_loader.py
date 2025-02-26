@@ -56,6 +56,16 @@ class ConfigLoader:
                 data_config = yaml.safe_load(f)
                 # 递归更新配置
                 config = ConfigLoader._deep_update(config, data_config)
+
+        # 如果配置中指定了 prompt_file，从文件加载提示词
+        if 'prompt_file' in config:
+            prompt_file = Path(config['prompt_file'])
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    config['prompt'] = f.read().strip()
+            else:
+                print(f"Warning: Prompt file {prompt_file} not found")
+                config['prompt'] = ""
         
         # 替换环境变量
         config = ConfigLoader._replace_env_vars(config)

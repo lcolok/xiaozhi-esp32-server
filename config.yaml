@@ -41,10 +41,10 @@ xiaozhi:
     gain: 10  # 音量增益倍数，1.0表示不变，大于1增加音量，小于1降低音量
     smart_gain: true  # 是否启用智能增益（自动防止爆音）
   vad:
-    threshold: 0.2
+    threshold: 0.5 # 降低阈值，使其更容易检测到语音
     model_dir: models/snakers4_silero-vad
-    min_silence_duration_ms: 2000  # 如果说话停顿比较长，可以把这个值设置大一些
-prompt: ""
+    min_silence_duration_ms: 2000
+prompt_file: "prompts/system_prompt.md"  # 从外部文件加载系统提示词
 # 使用完声音文件后删除文件(Delete the sound file when you are done using it)
 delete_audio: true
 
@@ -61,7 +61,7 @@ CMD_exit:
 
 # 具体处理时选择的模块(The module selected for specific processing)
 selected_module:
-  ASR: SiliconflowASR
+  ASR: FunASR
   VAD: SileroVAD
   # 将根据配置名称对应的type调用实际的LLM适配器
   LLM: VolcengineLLM
@@ -238,7 +238,7 @@ TTS:
     api_key: ${MINIMAX_API_KEY}
     output_file: tmp/
     voice_setting:
-      speed: 1.15
+      speed: 1.25
       vol: 1
       pitch: 0
       # emotion: happy
